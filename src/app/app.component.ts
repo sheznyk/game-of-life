@@ -1,41 +1,77 @@
-import { Component, ViewChild, ElementRef, AfterViewInit, NgZone } from '@angular/core';
+import {
+  Component,
+  ViewChild,
+  ElementRef,
+  AfterViewInit,
+  NgZone,
+  OnInit,
+} from '@angular/core';
 import { ChangeDetectionStrategy } from '@angular/core';
 
-
-export const neiborsMask = [[-1, -1], [-1, 0], [-1, 1], [0, -1], [0, 1], [1, -1], [1, 0], [1, 1]];
-export class Cell {
+export const NEIBORS_MASK = [
+  [-1, -1],
+  [-1, 0],
+  [-1, 1],
+  [0, -1],
+  [0, 1],
+  [1, -1],
+  [1, 0],
+  [1, 1],
+];
+export interface Cell {
   x: number;
   y: number;
-  private alive: number;
-  private generation: Array<number> = [];
-  private neiborsArray: Cell[];
+  neibors: number[];
+}
 
-  get isAlive(): number {
-    return this.alive;
+function createCell(
+  x: number,
+  y: number,
+  maxX: number,
+  maxY: number,
+  neiborsMask = NEIBORS_MASK
+): Cell {
+  return { x, y, neibors: calculateNeibors(x, y, maxX, maxY, neiborsMask) };
+}
+
+function calculateNeibors(
+  x: number,
+  y: number,
+  maxX: number,
+  maxY: number,
+  neiborsMask: number[][]
+): number[] {
+  return neiborsMask.map(([shiftX, shiftY]) => {
+    const shiftedX = x + shiftX;
+    const shiftedY = y + shiftY;
+    return (
+      comparePointOnAxis(shiftedX, maxX) + comparePointOnAxis(shiftedY, maxY) * maxX
+    );
+  });
+}
+
+function calcLifePoints(neibors: number[], cellAliveList: boolean[]): number {
+  return neibors.reduce((lifePoints: number, cellIndex: number) => {
+    return lifePoints + +cellAliveList[cellIndex];
+  }, 0);
+}
+
+function extinction(lifePoints: number, isAlive: boolean): boolean {
+  if (!isAlive && lifePoints === 3) {
+    return true;
+  } else if (isAlive && (lifePoints < 2 || lifePoints > 3)) {
+    return false;
   }
+  return isAlive;
+}
 
-  set neibors(value: Cell) {
-    this.neiborsArray.push(value);
+function comparePointOnAxis(point: number, maxPoint: number): number {
+  if (point === -1) {
+    return  maxPoint - 1;
+  } else if (point === maxPoint) {
+    return 0;
   }
-
-  extinction(generationId: number) {
-    const lifePoints = this.neiborsArray.reduce((sum: number, cell: Cell) => sum += cell.generation[generationId], 0);
-    if (this.alive === 0 && lifePoints === 3) {
-      this.alive = 1;
-    } else if (this.alive === 1 && (lifePoints < 2 || lifePoints > 3)) {
-      this.alive = 0;
-    }
-    this.generation.push(this.alive);
-  }
-
-  constructor(x: number, y: number) {
-    this.x = x;
-    this.y = y;
-    this.alive = Math.floor(Math.random() * 2);
-    this.generation.push(this.alive);
-    this.neiborsArray = new Array<Cell>();
-  }
-
+  return point;
 }
 
 @Component({
@@ -44,13 +80,15 @@ export class Cell {
   styleUrls: ['./app.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
-export class AppComponent implements AfterViewInit {
-
-  private resolution = 10;
-  private worldDesk: Cell[];
-  private generationId = 0;
+export class AppComponent implements AfterViewInit, OnInit {
+  private resolution = 3;
+  private frmaesPerSecond = 60;
+  private worldDesk: Cell[] = [];
+  private prevCellAlive: boolean[] = [];
+  private nextCellAlive: boolean[] = [];
   ctx: CanvasRenderingContext2D;
-  @ViewChild('canvasWorldDesk', { static: true }) canvasWorldDesk: ElementRef<HTMLCanvasElement>;
+  @ViewChild('canvasWorldDesk', { static: true })
+  canvasWorldDesk: ElementRef<HTMLCanvasElement>;
 
   constructor(private ngZone: NgZone) {}
 
@@ -58,65 +96,61 @@ export class AppComponent implements AfterViewInit {
     this.ctx = this.canvasWorldDesk.nativeElement.getContext('2d');
     this.ctx.fillStyle = 'black';
     this.ctx.strokeStyle = 'black';
-    this.ngZone.runOutsideAngular(() => this.generateWorldDesk());
-    requestAnimationFrame(() => this.newIterationWorldDesk());
+    this.ngZone.runOutsideAngular( () => this.generateWorldDesk());
+  }
+
+  ngOnInit() {
   }
 
   generateWorldDesk() {
     const columns = this.canvasWorldDesk.nativeElement.width / this.resolution;
     const rows = this.canvasWorldDesk.nativeElement.height / this.resolution;
-    this.worldDesk = new Array<Cell>();
+    this.prevCellAlive = Array.from({ length: columns * rows }, () => Boolean(Math.floor(Math.random() * 2)));
     for (let y = 0; y < rows; y++) {
       for (let x = 0; x < columns; x++) {
-        const cell = new Cell(x, y);
-        this.worldDesk.push(cell);
+        this.worldDesk.push(createCell(x, y, columns, rows));
       }
     }
-    for (const cell of this.worldDesk) {
-      for (const neiborXY of neiborsMask) {
-        let neiborX = neiborXY[0] + cell.x;
-        let neiborY = neiborXY[1] + cell.y;
 
-        if (neiborX === -1) {
-          neiborX = columns - 1;
-        } else if (neiborX === columns) {
-          neiborX = 0;
-        }
-
-        if (neiborY === -1) {
-          neiborY = rows - 1;
-        } else if (neiborY === rows) {
-          neiborY = 0;
-        }
-
-        cell.neibors = this.worldDesk.find(el => el.x === neiborX && el.y === neiborY);
-
-      }
-
-    }
-
+    requestAnimationFrame(() => this.newIterationWorldDesk());
   }
 
   newIterationWorldDesk() {
-    requestAnimationFrame(() =>
-    this.ctx.fillRect(0, 0, this.canvasWorldDesk.nativeElement.width, this.canvasWorldDesk.nativeElement.height));
-    for (const cell of this.worldDesk) {
-      if (cell.isAlive === 1) {
-        requestAnimationFrame( () => {
-          this.ctx.beginPath();
-          this.ctx.clearRect(cell.x * this.resolution, cell.y * this.resolution, this.resolution, this.resolution);
-          this.ctx.strokeRect(cell.x * this.resolution, cell.y * this.resolution, this.resolution, this.resolution);
-          this.ctx.closePath();
-        });
+    this.ctx.fillRect(
+      0,
+      0,
+      this.canvasWorldDesk.nativeElement.width,
+      this.canvasWorldDesk.nativeElement.height
+    );
+    for (let cellIndex = 0; cellIndex < this.prevCellAlive.length; cellIndex++) {
+      const { x, y, neibors } = this.worldDesk[cellIndex];
+      const isAlive = this.prevCellAlive[cellIndex];
+      if (isAlive) {
+
+        this.ctx.beginPath();
+        this.ctx.clearRect(
+          x * this.resolution,
+          y * this.resolution,
+          this.resolution,
+          this.resolution
+        );
+        this.ctx.strokeRect(
+          x * this.resolution,
+          y * this.resolution,
+          this.resolution,
+          this.resolution
+        );
+        this.ctx.closePath();
       }
+      const lifePoints = calcLifePoints(neibors, this.prevCellAlive);
+      this.nextCellAlive[cellIndex] = extinction(lifePoints, isAlive);
     }
 
-    for (const cell of this.worldDesk) {
-      cell.extinction(this.generationId);
-    }
-    this.generationId++;
-    setTimeout( () =>
-    requestAnimationFrame(() => this.newIterationWorldDesk()), 5);
+    this.prevCellAlive = [...this.nextCellAlive];
+    this.nextCellAlive = []
+    setTimeout(
+      () => requestAnimationFrame(() => this.newIterationWorldDesk()),
+      1000 / this.frmaesPerSecond
+    );
   }
-
 }
